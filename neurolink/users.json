@@ -1,0 +1,10 @@
+{
+  "users": [
+    {
+      "username": "admin",
+      "role": "system_admin",
+      "salt": "40bcccdf1f9bb753028ef245c5751b8f",
+      "pwd_hash": "ac3a2e7e811962ffa610e80a6639f045a5acea9b4d358d76c792465617c94f0c"
+    }
+  ]
+}
