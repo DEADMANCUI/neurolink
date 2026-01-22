@@ -1,0 +1,45 @@
+name: CI / Deploy to Raspberry Pi
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install requirements
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f neurolink/requirements.txt ]; then pip install -r neurolink/requirements.txt; fi
+
+      - name: Copy files to Pi
+        uses: appleboy/scp-action@v0.1.8
+        with:
+          host: ${{ secrets.PI_HOST }}
+          username: ${{ secrets.PI_USER }}
+          port: ${{ secrets.PI_PORT }}
+          key: ${{ secrets.PI_SSH_PRIVATE_KEY }}
+          source: "./neurolink"
+          target: "~/neurolink"
+
+      - name: Start application on Pi
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.PI_HOST }}
+          username: ${{ secrets.PI_USER }}
+          port: ${{ secrets.PI_PORT }}
+          key: ${{ secrets.PI_SSH_PRIVATE_KEY }}
+          script: |
+            export DISPLAY=:0
+            export XAUTHORITY=~/.Xauthority
+            nohup python3 ~/neurolink/src/main.py > ~/neurolink/run.log 2>&1 &
