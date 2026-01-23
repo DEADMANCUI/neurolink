@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 import tkinter as tk
 from tkinter import font, messagebox
 
@@ -38,10 +39,18 @@ def read_version():
 
 
 class LoginApp:
-    def __init__(self, root):
+    def __init__(self, root, touch_mode: bool = False):
         self.root = root
         self.root.title("neurolink")
         self.root.configure(bg="black")
+        self.touch_mode = bool(touch_mode)
+
+        # If touch mode, prefer fullscreen on touch devices
+        if self.touch_mode:
+            try:
+                self.root.attributes("-fullscreen", True)
+            except Exception:
+                pass
 
         # Windowed mode slightly smaller than full screen (90%) and centered
         try:
@@ -116,8 +125,15 @@ class LoginApp:
         self.frame = tk.Frame(self.container, bg="black")
         self.frame.grid(row=2, column=0)
 
-        label_font = font.Font(size=18)
-        entry_font = font.Font(size=16)
+        # fonts: increase sizes in touch mode
+        if getattr(self, "touch_mode", False):
+            label_font = font.Font(size=26)
+            entry_font = font.Font(size=22)
+            btn_font = font.Font(size=24)
+        else:
+            label_font = font.Font(size=18)
+            entry_font = font.Font(size=16)
+            btn_font = font.Font(size=18)
 
         tk.Label(self.frame, text="用户名", fg="white", bg="black", font=label_font).grid(row=0, column=0, pady=8, sticky="e")
         self.username = tk.Entry(self.frame, font=entry_font, width=20)
@@ -127,7 +143,11 @@ class LoginApp:
         self.password = tk.Entry(self.frame, font=entry_font, show="*", width=20)
         self.password.grid(row=1, column=1, pady=8, padx=10)
 
-        self.login_btn = tk.Button(self.frame, text="登录", command=self.submit, font=label_font)
+        # touch-friendly button size when enabled
+        if getattr(self, "touch_mode", False):
+            self.login_btn = tk.Button(self.frame, text="登录", command=self.submit, font=btn_font, height=2, width=14)
+        else:
+            self.login_btn = tk.Button(self.frame, text="登录", command=self.submit, font=btn_font)
         self.login_btn.grid(row=2, column=0, columnspan=2, pady=16)
 
         self.username.focus_set()
@@ -190,8 +210,16 @@ class LoginApp:
             self.ver_label.grid(row=1, column=0, pady=(0, 8))
             print(f"LOGO: not found at {logo_path} or failed to load")
 
-        label_font = font.Font(size=18)
-        entry_font = font.Font(size=16)
+
+        # second set (recreate fonts if needed)
+        if getattr(self, "touch_mode", False):
+            label_font = font.Font(size=26)
+            entry_font = font.Font(size=22)
+            btn_font = font.Font(size=24)
+        else:
+            label_font = font.Font(size=18)
+            entry_font = font.Font(size=16)
+            btn_font = font.Font(size=18)
 
         tk.Label(self.frame, text="用户名", fg="white", bg="black", font=label_font).grid(row=0, column=0, pady=8, sticky="e")
         self.username = tk.Entry(self.frame, font=entry_font, width=20)
@@ -201,7 +229,10 @@ class LoginApp:
         self.password = tk.Entry(self.frame, font=entry_font, show="*", width=20)
         self.password.grid(row=1, column=1, pady=8, padx=10)
 
-        self.login_btn = tk.Button(self.frame, text="登录", command=self.submit, font=label_font)
+        if getattr(self, "touch_mode", False):
+            self.login_btn = tk.Button(self.frame, text="登录", command=self.submit, font=btn_font, height=2, width=14)
+        else:
+            self.login_btn = tk.Button(self.frame, text="登录", command=self.submit, font=btn_font)
         self.login_btn.grid(row=2, column=0, columnspan=2, pady=16)
 
         self.username.focus_set()
@@ -227,7 +258,7 @@ class LoginApp:
                 self.container.place_forget()
             except Exception:
                 pass
-            self.mapwin = mapview.MapWindow(self.root)
+            self.mapwin = mapview.MapWindow(self.root, touch_mode=getattr(self, "touch_mode", False))
         except Exception as e:
             messagebox.showerror("错误", str(e))
 
@@ -247,8 +278,12 @@ class LoginApp:
 
 
 def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--touch", action="store_true", help="enable touch-friendly UI (fullscreen, larger controls)")
+    args, _ = parser.parse_known_args()
+
     root = tk.Tk()
-    app = LoginApp(root)
+    app = LoginApp(root, touch_mode=bool(args.touch))
     # add a small management button under the stacked container
     try:
         mgmt_btn = tk.Button(app.container, text="用户管理", command=app.open_usermgmt)

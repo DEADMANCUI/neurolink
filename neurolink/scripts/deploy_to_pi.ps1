@@ -18,7 +18,7 @@ ssh $piUser@$piHost "sudo apt-get update -y && sudo apt-get install -y python3-p
 ssh $piUser@$piHost "python3 -c 'import PIL; print(\"PIL OK\", PIL.__version__)' || pip3 install --user pillow"
 
 # Start the app in Pi desktop session (assumes DISPLAY :0 and XAUTHORITY at ~/.Xauthority)
-$startCmd = "export DISPLAY=:0; export XAUTHORITY=/home/${piUser}/.Xauthority; nohup python3 $remoteDir/src/main.py > $remoteDir/run.log 2>&1 & echo $!"
+$startCmd = "export DISPLAY=:0; export XAUTHORITY=/home/${piUser}/.Xauthority; nohup python3 $remoteDir/src/main.py --touch > $remoteDir/run.log 2>&1 & echo $!"
 Write-Host "Starting app on Pi..."
 ssh $piUser@$piHost $startCmd
 

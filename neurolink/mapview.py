@@ -1,7 +1,7 @@
 import os
 import json
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, font
 
 try:
     from PIL import Image, ImageTk
@@ -29,8 +29,9 @@ class MapWindow:
     the location arrow on the map.
     """
 
-    def __init__(self, parent, config_path=None):
+    def __init__(self, parent, config_path=None, touch_mode: bool = False):
         self.parent = parent
+        self.touch_mode = bool(touch_mode)
         base = os.path.abspath(os.path.join(os.path.dirname(__file__), "."))
         self.base = base
         if config_path is None:
@@ -55,8 +56,15 @@ class MapWindow:
         # top toolbar
         tb = tk.Frame(self.frame, bg="#222")
         tb.pack(fill="x")
-        tk.Button(tb, text="返回", command=self.close).pack(side="right", padx=6, pady=6)
-        tk.Button(tb, text="设置为当前位置(点击地图)", command=self.enable_set_mode).pack(side="right", padx=6, pady=6)
+        # touch-friendly font sizing
+        if self.touch_mode:
+            tb_font = font.Font(size=20)
+            pad = 10
+        else:
+            tb_font = font.Font(size=12)
+            pad = 6
+        tk.Button(tb, text="返回", command=self.close, font=tb_font).pack(side="right", padx=pad, pady=pad)
+        tk.Button(tb, text="设置为当前位置(点击地图)", command=self.enable_set_mode, font=tb_font).pack(side="right", padx=pad, pady=pad)
 
         # canvas for map
         self.canvas = tk.Canvas(self.frame, bg="#333")
