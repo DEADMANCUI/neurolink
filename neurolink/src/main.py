@@ -11,6 +11,11 @@ if base not in sys.path:
 import users
 import usermgmt
 import mapview
+import shutil
+import subprocess
+import threading
+import time
+import signal
 
 # Optional Pillow support for JPEG/other formats
 try:
@@ -38,6 +43,10 @@ def read_version():
         return "0.0.0"
 
 
+
+
+
+
 class LoginApp:
     def __init__(self, root, touch_mode: bool = False):
         self.root = root
@@ -45,26 +54,43 @@ class LoginApp:
         self.root.configure(bg="black")
         self.touch_mode = bool(touch_mode)
 
-        # If touch mode, prefer fullscreen on touch devices
-        if self.touch_mode:
-            try:
-                self.root.attributes("-fullscreen", True)
-            except Exception:
-                pass
+        # Always run fullscreen (user requested full-screen operation)
+        try:
+            self.root.attributes("-fullscreen", True)
+        except Exception:
+            pass
 
         # Windowed mode slightly smaller than full screen (90%) and centered
         try:
             ws = self.root.winfo_screenwidth()
             hs = self.root.winfo_screenheight()
-            win_w = max(800, int(ws * 0.9))
-            win_h = max(480, int(hs * 0.9))
-            x = (ws - win_w) // 2
-            y = (hs - win_h) // 2
-            try:
-                self.root.geometry(f"{win_w}x{win_h}+{x}+{y}")
-            except Exception:
-                # fallback to a reasonable window size
-                self.root.geometry(f"{max(800, ws-10)}x{max(480, hs-10)}+{x}+{y}")
+            # scale factor for fonts/widgets (allow making UI smaller on small screens)
+            self._scale_factor = 1.0
+            # If the attached display is the 800x480 LCD, prefer fullscreen and slightly reduce scale
+            if ws == 800 and hs == 480:
+                try:
+                    self.root.attributes("-fullscreen", True)
+                except Exception:
+                    try:
+                        self.root.geometry("800x480+0+0")
+                    except Exception:
+                        pass
+                try:
+                    self.root.resizable(False, False)
+                except Exception:
+                    pass
+                # make UI a bit smaller to better fit limited pixels
+                self._scale_factor = 0.85
+            else:
+                win_w = max(800, int(ws * 0.9))
+                win_h = max(480, int(hs * 0.9))
+                x = (ws - win_w) // 2
+                y = (hs - win_h) // 2
+                try:
+                    self.root.geometry(f"{win_w}x{win_h}+{x}+{y}")
+                except Exception:
+                    # fallback to a reasonable window size
+                    self.root.geometry(f"{max(800, ws-10)}x{max(480, hs-10)}+{x}+{y}")
         except Exception:
             try:
                 self.root.geometry("800x480")
@@ -125,15 +151,17 @@ class LoginApp:
         self.frame = tk.Frame(self.container, bg="black")
         self.frame.grid(row=2, column=0)
 
-        # fonts: increase sizes in touch mode
+        # fonts: increase sizes in touch mode, but respect scale factor
+        scale = getattr(self, '_scale_factor', 1.0)
         if getattr(self, "touch_mode", False):
-            label_font = font.Font(size=26)
-            entry_font = font.Font(size=22)
-            btn_font = font.Font(size=24)
+            label_font = font.Font(size=max(12, int(round(26 * scale))))
+            entry_font = font.Font(size=max(10, int(round(22 * scale))))
+            btn_font = font.Font(size=max(12, int(round(24 * scale))))
         else:
-            label_font = font.Font(size=18)
-            entry_font = font.Font(size=16)
-            btn_font = font.Font(size=18)
+            # default smaller sizes to fit 800x480 better
+            label_font = font.Font(size=max(10, int(round(16 * scale))))
+            entry_font = font.Font(size=max(9, int(round(14 * scale))))
+            btn_font = font.Font(size=max(10, int(round(16 * scale))))
 
         tk.Label(self.frame, text="用户名", fg="white", bg="black", font=label_font).grid(row=0, column=0, pady=8, sticky="e")
         self.username = tk.Entry(self.frame, font=entry_font, width=20)
@@ -152,6 +180,37 @@ class LoginApp:
 
         self.username.focus_set()
         self.root.bind("<Return>", lambda e: self.submit())
+
+        # Virtual keyboard support: prefer system on-screen keyboard and start on click
+        self._kb_proc = None
+        self._kb_cmd = None
+        self._kb_started_by_us = False
+        self._started_at = time.time()
+        self._last_kb_widget = None
+        self._last_kb_start_time = 0.0
+        # no internal fallback keyboard; use system keyboard only
+        self._internal_kb = None
+        try:
+            # prefer onboard (GTK), then matchbox-keyboard (X), then squeekboard
+            if shutil.which("onboard"):
+                self._kb_cmd = ["onboard"]
+            elif shutil.which("matchbox-keyboard"):
+                self._kb_cmd = ["matchbox-keyboard"]
+            elif shutil.which("squeekboard"):
+                self._kb_cmd = ["squeekboard"]
+            else:
+                self._kb_cmd = None
+        except Exception:
+            self._kb_cmd = None
+
+        # always bind clicks to attempt launching the system keyboard
+        try:
+            self.username.bind("<Button-1>", lambda e: self._on_field_click(e.widget))
+            self.password.bind("<Button-1>", lambda e: self._on_field_click(e.widget))
+            self.username.bind("<FocusOut>", lambda e: self._on_field_focus_out(e.widget))
+            self.password.bind("<FocusOut>", lambda e: self._on_field_focus_out(e.widget))
+        except Exception:
+            pass
 
         # Now that entries exist and have requested sizes, resize logo to
         # match the username entry width and place it above the version.
@@ -211,15 +270,16 @@ class LoginApp:
             print(f"LOGO: not found at {logo_path} or failed to load")
 
 
-        # second set (recreate fonts if needed)
+        # second set (recreate fonts if needed) — keep same scale logic
+        scale = getattr(self, '_scale_factor', 1.0)
         if getattr(self, "touch_mode", False):
-            label_font = font.Font(size=26)
-            entry_font = font.Font(size=22)
-            btn_font = font.Font(size=24)
+            label_font = font.Font(size=max(12, int(round(26 * scale))))
+            entry_font = font.Font(size=max(10, int(round(22 * scale))))
+            btn_font = font.Font(size=max(12, int(round(24 * scale))))
         else:
-            label_font = font.Font(size=18)
-            entry_font = font.Font(size=16)
-            btn_font = font.Font(size=18)
+            label_font = font.Font(size=max(10, int(round(16 * scale))))
+            entry_font = font.Font(size=max(9, int(round(14 * scale))))
+            btn_font = font.Font(size=max(10, int(round(16 * scale))))
 
         tk.Label(self.frame, text="用户名", fg="white", bg="black", font=label_font).grid(row=0, column=0, pady=8, sticky="e")
         self.username = tk.Entry(self.frame, font=entry_font, width=20)
@@ -237,6 +297,16 @@ class LoginApp:
 
         self.username.focus_set()
         self.root.bind("<Return>", lambda e: self.submit())
+
+        # Ensure event bindings are attached to the (possibly recreated) entry widgets
+        if self._kb_cmd:
+            try:
+                self.username.bind("<Button-1>", lambda e: self._on_field_click(e.widget))
+                self.password.bind("<Button-1>", lambda e: self._on_field_click(e.widget))
+                self.username.bind("<FocusOut>", lambda e: self._on_field_focus_out(e.widget))
+                self.password.bind("<FocusOut>", lambda e: self._on_field_focus_out(e.widget))
+            except Exception:
+                pass
 
     def submit(self):
         user = self.username.get().strip()
@@ -261,6 +331,263 @@ class LoginApp:
             self.mapwin = mapview.MapWindow(self.root, touch_mode=getattr(self, "touch_mode", False))
         except Exception as e:
             messagebox.showerror("错误", str(e))
+
+    def _start_virtual_keyboard(self):
+        try:
+            # if we already have a running process, verify it's alive
+            if getattr(self, "_kb_proc", None) is not None:
+                try:
+                    if self._kb_proc.poll() is None:
+                        return
+                except Exception:
+                    return
+            if not getattr(self, "_kb_cmd", None):
+                return
+            env = dict(**os.environ)
+            env["DISPLAY"] = env.get("DISPLAY", ":0")
+            env["XAUTHORITY"] = env.get("XAUTHORITY", "/home/patrickcui/.Xauthority")
+            # resolve path
+            kb_path = None
+            try:
+                kb_path = shutil.which(self._kb_cmd[0]) if isinstance(self._kb_cmd, (list, tuple)) and self._kb_cmd else None
+            except Exception:
+                kb_path = None
+            cmd = self._kb_cmd if not kb_path else [kb_path] + (self._kb_cmd[1:] if len(self._kb_cmd) > 1 else [])
+            # avoid starting duplicate keyboard processes: check for existing processes
+            try:
+                existing = []
+                proc_name = (self._kb_cmd[0] if isinstance(self._kb_cmd, (list, tuple)) else str(self._kb_cmd))
+                if shutil.which("pgrep"):
+                    try:
+                        out = subprocess.check_output(["pgrep", "-f", proc_name])
+                        existing = out.split()
+                    except subprocess.CalledProcessError:
+                        existing = []
+                    except Exception:
+                        existing = []
+                else:
+                    # fallback to ps -ef and text search
+                    try:
+                        out = subprocess.check_output(["ps", "-eo", "pid,cmd"]).decode(errors="ignore")
+                        for ln in out.splitlines():
+                            if proc_name in ln and 'pgrep' not in ln:
+                                parts = ln.strip().split(None, 1)
+                                if parts:
+                                    existing.append(parts[0].encode())
+                    except Exception:
+                        existing = []
+                if existing:
+                    try:
+                        if logf:
+                            logf.write(f"KB: existing process(es) detected for {proc_name}, skipping spawn: {existing}\n")
+                    except Exception:
+                        pass
+                    # don't spawn a new one if one is already present
+                    self._kb_proc = None
+                    self._kb_started_by_us = False
+                    return
+            except Exception:
+                pass
+            try:
+                logf = open(os.path.join(base, "run.log"), "a", encoding="utf-8")
+            except Exception:
+                logf = None
+            try:
+                self._kb_proc = subprocess.Popen(cmd, env=env, preexec_fn=os.setsid, stdout=(logf or subprocess.DEVNULL), stderr=(logf or subprocess.DEVNULL))
+                self._kb_started_by_us = True
+                try:
+                    self._last_kb_start_time = time.time()
+                    if logf:
+                        logf.write(f"KB: started {cmd} pid={self._kb_proc.pid}\n")
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    if logf:
+                        logf.write(f"KB: failed to start {cmd}: {e}\n")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _stop_virtual_keyboard(self):
+        try:
+            if getattr(self, "_kb_proc", None):
+                try:
+                    pid = self._kb_proc.pid
+                    if self._kb_started_by_us:
+                        try:
+                            os.killpg(os.getpgid(pid), signal.SIGTERM)
+                        except Exception:
+                            try:
+                                os.kill(pid, signal.SIGTERM)
+                            except Exception:
+                                pass
+                    else:
+                        try:
+                            self._kb_proc.terminate()
+                        except Exception:
+                            pass
+                    try:
+                        self._kb_proc.wait(timeout=1.0)
+                    except Exception:
+                        try:
+                            if self._kb_started_by_us:
+                                os.killpg(os.getpgid(pid), signal.SIGKILL)
+                            else:
+                                self._kb_proc.kill()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                finally:
+                    self._kb_proc = None
+                    self._kb_started_by_us = False
+            else:
+                # fallback: try pkill to stop common keyboards
+                try:
+                    if shutil.which("pkill"):
+                        subprocess.call(["pkill", "-f", "matchbox-keyboard"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # hide internal keyboard as well
+        # no internal keyboard to hide
+
+    def _on_field_focus_out(self, widget):
+        try:
+            # small delay to avoid flicker when switching fields; increase delay
+            # so clicks that move focus to the keyboard won't immediately close it
+            self.root.after(600, lambda: self._stop_virtual_keyboard())
+        except Exception:
+            pass
+
+    def _on_field_click(self, widget):
+        try:
+            # if keyboard command not set, try detect again
+            if not getattr(self, "_kb_cmd", None):
+                try:
+                    if shutil.which("squeekboard"):
+                        self._kb_cmd = ["squeekboard"]
+                    elif shutil.which("matchbox-keyboard"):
+                        self._kb_cmd = ["matchbox-keyboard"]
+                    elif shutil.which("onboard"):
+                        self._kb_cmd = ["onboard"]
+                except Exception:
+                    pass
+            # remember which widget triggered the keyboard so positioning can use it
+            try:
+                self._last_kb_widget = widget
+            except Exception:
+                self._last_kb_widget = None
+
+            # debounce rapid clicks: avoid restarting within 1s
+            try:
+                if getattr(self, "_kb_proc", None) is not None and getattr(self._kb_proc, "poll", lambda: 1)() is None:
+                    # already running
+                    pass
+                else:
+                    # prevent rapid restarts
+                    if time.time() - getattr(self, "_last_kb_start_time", 0.0) < 1.0:
+                        pass
+                    else:
+                        self._start_virtual_keyboard()
+            except Exception:
+                # best-effort start
+                try:
+                    self._start_virtual_keyboard()
+                except Exception:
+                    pass
+
+            try:
+                # position keyboard after a short delay to allow window to appear
+                self.root.after(300, lambda: threading.Thread(target=self._position_virtual_keyboard, args=(self._last_kb_widget,), daemon=True).start())
+            except Exception:
+                threading.Thread(target=self._position_virtual_keyboard, args=(self._last_kb_widget,), daemon=True).start()
+
+            # do not use internal keyboard fallback; rely on system keyboard only
+        except Exception:
+            pass
+
+    def _position_virtual_keyboard(self, widget=None):
+        try:
+            if not getattr(self, "_kb_cmd", None):
+                return
+            # allow being called without widget (use last clicked or focused widget)
+            if widget is None:
+                widget = getattr(self, "_last_kb_widget", None) or self.root.focus_get()
+            if widget is None:
+                return
+            if not shutil.which("xdotool"):
+                return
+            patterns = [b"onboard", b"Onboard", b"matchbox-keyboard", b"Matchbox", b"squeekboard", b"Squeekboard"]
+            for attempt in range(10):
+                try:
+                    wx = widget.winfo_rootx()
+                    wy = widget.winfo_rooty()
+                    wh = widget.winfo_height()
+                    sx = self.root.winfo_screenwidth()
+                    sy = self.root.winfo_screenheight()
+                except Exception:
+                    return
+                for p in patterns:
+                    try:
+                        out = subprocess.check_output(["xdotool", "search", "--name", p.decode()])
+                        ids = out.split()
+                    except subprocess.CalledProcessError:
+                        ids = []
+                    except Exception:
+                        ids = []
+                    if ids:
+                        k_h = None
+                        for wid in ids:
+                            try:
+                                geom = subprocess.check_output(["xdotool", "getwindowgeometry", "--shell", wid.decode()])
+                                lines = geom.decode().splitlines()
+                                kv = {}
+                                for ln in lines:
+                                    if '=' in ln:
+                                        k, v = ln.split('=',1)
+                                        try:
+                                            kv[k.strip()] = int(v)
+                                        except Exception:
+                                            pass
+                                if 'HEIGHT' in kv:
+                                    k_h = kv['HEIGHT']
+                                    break
+                            except Exception:
+                                k_h = None
+                        margin = 6
+                        if k_h:
+                            # space available below the widget
+                            space_below = sy - (wy + wh)
+                            if space_below >= k_h + margin:
+                                # place directly below the widget
+                                ty = wy + wh + margin
+                            else:
+                                # not enough space below; prefer bottom-align the keyboard
+                                ty = max(0, sy - k_h - margin)
+                                # if bottom align would overlap the widget, try above the widget
+                                if ty <= wy and wy - k_h - margin >= 0:
+                                    ty = max(0, wy - k_h - margin)
+                        else:
+                            # unknown keyboard height: prefer bottom area but try below widget first
+                            preferred_ty = wy + wh + margin
+                            if preferred_ty <= sy - 80:
+                                ty = preferred_ty
+                            else:
+                                ty = max(0, sy - 200)
+                        tx = max(0, wx)
+                        for wid in ids:
+                            try:
+                                subprocess.call(["xdotool", "windowmove", wid.decode(), str(tx), str(ty)])
+                            except Exception:
+                                pass
+                        return
+                time.sleep(0.25)
+        except Exception:
+            pass
 
     def open_usermgmt(self):
         # Prompt for admin credentials before opening management UI
